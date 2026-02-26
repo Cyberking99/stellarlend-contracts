@@ -1393,10 +1393,7 @@ impl HelloContract {
     }
 
     // ============================================================================
-    // Governance Query Functions
-    // ============================================================================
-<<<<<<< test/cross-asset-borrow-repay-edge-cases
-    // CROSS-ASSET OPERATIONS
+    // Cross-Asset Operations
     // ============================================================================
 
     /// Initialize cross-asset system with admin
@@ -1422,8 +1419,12 @@ impl HelloContract {
         borrow_factor: Option<i128>,
         max_supply: Option<i128>,
         max_borrow: Option<i128>,
-        can_collateralize: Option<bool>,
-        can_borrow: Option<bool>,
+        max_collateral: Option<i128>,
+        max_deposit: Option<i128>,
+        reserve_factor: Option<i128>,
+        base_rate: Option<i128>,
+        slope1: Option<i128>,
+        slope2: Option<i128>,
     ) -> Result<(), CrossAssetError> {
         update_asset_config(
             &env,
@@ -1432,8 +1433,12 @@ impl HelloContract {
             borrow_factor,
             max_supply,
             max_borrow,
-            can_collateralize,
-            can_borrow,
+            max_collateral,
+            max_deposit,
+            reserve_factor,
+            base_rate,
+            slope1,
+            slope2,
         )
     }
 
@@ -1517,7 +1522,8 @@ impl HelloContract {
     }
 
     // ============================================================================
-=======
+    // Governance Query Functions
+    // ============================================================================
 
     /// Get proposal by ID
     pub fn gov_get_proposal(env: Env, proposal_id: u64) -> Option<Proposal> {
@@ -1628,7 +1634,6 @@ impl HelloContract {
     ) -> Result<i128, BridgeError> {
         bridge_withdraw(&env, user, network_id, asset, amount)
     }
->>>>>>> main
 }
 
 #[cfg(test)]
