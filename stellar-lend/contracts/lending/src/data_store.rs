@@ -489,6 +489,7 @@ impl DataStore {
     ///
     /// # Events
     /// Emits `(ds_migr, caller, new_version)` on success.
+    #[allow(deprecated)]
     pub fn data_migrate_bump_version(
         env: Env,
         caller: Address,

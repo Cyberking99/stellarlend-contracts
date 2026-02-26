@@ -35,7 +35,7 @@ use views::{
 };
 
 use withdraw::{
-    withdraw as withdraw_logic, WithdrawError,
+    withdraw as withdraw_logic,
 };
 mod data_store;
 use stellarlend_common::upgrade;
