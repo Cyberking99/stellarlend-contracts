@@ -155,21 +155,40 @@ impl LendingContract {
         deposit_impl(&env, user, asset, amount)
     }
 
-    /// Liquidate a position
+    /// Liquidate a position [Issue #391 - Profiling Enabled]
     pub fn liquidate(
         env: Env,
         liquidator: Address,
-        _borrower: Address,
-        _debt_asset: Address,
-        _collateral_asset: Address,
-        _amount: i128,
+        borrower: Address,
+        debt_asset: Address,
+        collateral_asset: Address,
+        amount: i128,
     ) -> Result<(), BorrowError> {
         liquidator.require_auth();
         if is_paused(&env, PauseType::Liquidation) {
             return Err(BorrowError::ProtocolPaused);
         }
-        // Stub implementation, or call borrow::liquidate if it exists
+        
+        // Point to the internal liquidation logic in the borrow module
+        borrow::liquidate_position(
+            &env,
+            liquidator,
+            borrower,
+            debt_asset,
+            collateral_asset,
+            amount,
+        )?;
+        
         Ok(())
+    }
+
+    /// Returns gas/performance stats for the current transaction (Issue #391)
+    /// [CPU Instructions, Memory Bytes]
+    pub fn get_performance_stats(env: Env) -> Vec<u64> {
+        let mut stats = Vec::new(&env);
+        stats.push_back(env.budget().cpu_instruction_count());
+        stats.push_back(env.budget().memory_bytes_count());
+        stats
     }
 
     /// Get user's debt position
@@ -253,7 +272,6 @@ impl LendingContract {
     }
 
     /// Set deposit pause state (admin only)
-    /// Deprecated: use set_pause instead
     pub fn set_deposit_paused(env: Env, paused: bool) -> Result<(), DepositError> {
         let admin = get_protocol_admin(&env).ok_or(DepositError::Unauthorized)?;
         admin.require_auth();
@@ -384,14 +402,5 @@ impl LendingContract {
 
     pub fn current_version(env: Env) -> u32 {
         upgrade::UpgradeManager::current_version(env)
-    }
-  
-    /// Initialize borrow settings (admin only)
-    pub fn initialize_borrow_settings(
-        env: Env,
-        debt_ceiling: i128,
-        min_borrow_amount: i128,
-    ) -> Result<(), BorrowError> {
-        initialize_borrow_logic(&env, debt_ceiling, min_borrow_amount)
     }
 }
