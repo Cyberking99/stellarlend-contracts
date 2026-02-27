@@ -1,26 +1,11 @@
-//! # Withdraw Module
-//!
-//! Handles collateral withdrawal operations for the lending protocol.
-//!
-//! This module enforces:
-//! - Sufficient collateral balance before withdrawal
-//! - Minimum collateral ratio is maintained after withdrawal (150% default)
-//! - Pause switch checks (both legacy and risk-management systems)
-//!
-//! ## Security
-//! - Withdrawals that would bring a position below the minimum collateral ratio
-//!   are rejected to prevent undercollateralization.
-//! - Tokens are transferred from the contract to the user via the token contract.
-
-#![allow(unused)]
-use soroban_sdk::{contracterror, Address, Env, IntoVal, Map, Symbol, Val, Vec};
+use soroban_sdk::{contracterror, Address, Env, Map, Symbol};
 
 use crate::deposit::{
     add_activity_log, emit_analytics_updated_event, emit_position_updated_event,
-    emit_user_activity_tracked_event, update_protocol_analytics, update_user_analytics, Activity,
-    AssetParams, DepositDataKey, Position, ProtocolAnalytics, UserAnalytics,
+    emit_user_activity_tracked_event, AssetParams, DepositDataKey, Position, ProtocolAnalytics,
+    UserAnalytics,
 };
-use crate::events::{log_withdrawal, WithdrawalEvent};
+use crate::events::{emit_withdrawal, WithdrawalEvent};
 
 /// Errors that can occur during withdraw operations
 #[contracterror]
@@ -45,9 +30,8 @@ pub enum WithdrawError {
     Undercollateralized = 8,
 }
 
-/// Minimum collateral ratio (in basis points, e.g., 15000 = 150%)
-/// This is the minimum ratio required: collateral_value / debt_value >= 1.5
-const MIN_COLLATERAL_RATIO_BPS: i128 = 15000; // 150%
+// Minimum collateral ratio is now managed by the risk_params module
+// const MIN_COLLATERAL_RATIO_BPS: i128 = 15000; // 150% (Legacy)
 
 /// Calculate collateral ratio
 /// Returns (collateral_value * collateral_factor) / (debt + interest)
@@ -123,7 +107,7 @@ fn validate_collateral_ratio_after_withdraw(
     };
 
     // Calculate total debt (debt + accrued interest)
-    let total_debt = position
+    let _total_debt = position
         .debt
         .checked_add(position.borrow_interest)
         .ok_or(WithdrawError::Overflow)?;
@@ -135,7 +119,8 @@ fn validate_collateral_ratio_after_withdraw(
         position.borrow_interest,
         collateral_factor,
     ) {
-        if new_ratio < MIN_COLLATERAL_RATIO_BPS {
+        let min_ratio = crate::risk_params::get_min_collateral_ratio(env).unwrap_or(15000);
+        if new_ratio < min_ratio {
             return Err(WithdrawError::InsufficientCollateralRatio);
         }
     } else {
@@ -190,6 +175,10 @@ pub fn withdraw_collateral(
     if amount <= 0 {
         return Err(WithdrawError::InvalidAmount);
     }
+
+    // Check for reentrancy
+    let _guard =
+        crate::reentrancy::ReentrancyGuard::new(env).map_err(|_| WithdrawError::Reentrancy)?;
 
     // Check if withdrawals are paused
     let pause_switches_key = DepositDataKey::PauseSwitches;
@@ -297,7 +286,7 @@ pub fn withdraw_collateral(
     })?;
 
     // Emit withdraw event
-    log_withdrawal(
+    emit_withdrawal(
         env,
         WithdrawalEvent {
             user: user.clone(),

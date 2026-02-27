@@ -1,6 +1,8 @@
+#![allow(unused_variables)]
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, log, symbol_short, Address, Env, Map,
-    String, Symbol, Vec,
+    contract, contracterror, contractevent, contractimpl, contracttype, log, symbol_short, Address,
+    BytesN, Env, String, Symbol, Vec, I256,
+    BytesN, Env, Env, String, String, Symbol, Symbol, Vec, Vec, I256,
 };
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -21,12 +23,54 @@ pub enum ContractError {
     NegativeMinAmount = 10,
     AmountNotPositive = 11,
     AmountBelowMinimum = 12,
+    Overflow = 13,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BridgeRegisteredEvent {
+    pub bridge_id: String,
+    pub fee_bps: u64,
+    pub min_amount: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BridgeFeeUpdatedEvent {
+    pub bridge_id: String,
+    pub fee_bps: u64,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BridgeActiveUpdatedEvent {
+    pub bridge_id: String,
+    pub active: bool,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BridgeDepositEvent {
+    pub bridge_id: String,
+    pub amount: i128,
+    pub fee: i128,
+    pub net: i128,
+}
+
+#[contractevent]
+#[derive(Clone, Debug)]
+pub struct BridgeWithdrawalEvent {
+    pub bridge_id: String,
+    pub amount: i128,
 }
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 const MAX_FEE_BPS: u64 = 1_000; // 10 % ceiling
+#[allow(dead_code)]
 const MAX_ID_LEN: u32 = 64;
+#[allow(dead_code)]
 const ADMIN_KEY: Symbol = symbol_short!("ADMIN");
 
 // ── Storage types ─────────────────────────────────────────────────────────────
@@ -49,9 +93,11 @@ pub enum DataKey {
 }
 
 #[contract]
+#[allow(dead_code)]
 pub struct BridgeContract;
 
 #[contractimpl]
+#[allow(dead_code)]
 impl BridgeContract {
     pub fn init(env: Env, admin: Address) -> Result<(), ContractError> {
         if env.storage().instance().has(&ADMIN_KEY) {
@@ -115,10 +161,6 @@ impl BridgeContract {
             .unwrap_or_else(|| Vec::new(env))
     }
 
-    fn emit(env: &Env, action: Symbol, bridge_id: &String, data: Map<Symbol, i128>) {
-        env.events().publish((action, bridge_id.clone()), data);
-    }
-
     // ── register_bridge ───────────────────────────────────────────────────────
 
     /// Admin: register a new bridge entry.
@@ -160,10 +202,12 @@ impl BridgeContract {
         list.push_back(bridge_id.clone());
         env.storage().instance().set(&DataKey::BridgeList, &list);
 
-        let mut d: Map<Symbol, i128> = Map::new(&env);
-        d.set(symbol_short!("fee_bps"), fee_bps as i128);
-        d.set(symbol_short!("min_amt"), min_amount);
-        Self::emit(&env, symbol_short!("reg_brdg"), &bridge_id, d);
+        BridgeRegisteredEvent {
+            bridge_id: bridge_id.clone(),
+            fee_bps,
+            min_amount,
+        }
+        .publish(&env);
         log!(&env, "register_bridge {}", bridge_id);
         Ok(())
     }
@@ -187,9 +231,11 @@ impl BridgeContract {
         cfg.fee_bps = fee_bps;
         Self::save_bridge(&env, &bridge_id, &cfg);
 
-        let mut d: Map<Symbol, i128> = Map::new(&env);
-        d.set(symbol_short!("fee_bps"), fee_bps as i128);
-        Self::emit(&env, symbol_short!("set_fee"), &bridge_id, d);
+        BridgeFeeUpdatedEvent {
+            bridge_id: bridge_id.clone(),
+            fee_bps,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -208,9 +254,11 @@ impl BridgeContract {
         cfg.active = active;
         Self::save_bridge(&env, &bridge_id, &cfg);
 
-        let mut d: Map<Symbol, i128> = Map::new(&env);
-        d.set(symbol_short!("active"), if active { 1 } else { 0 });
-        Self::emit(&env, symbol_short!("set_act"), &bridge_id, d);
+        BridgeActiveUpdatedEvent {
+            bridge_id: bridge_id.clone(),
+            active,
+        }
+        .publish(&env);
         Ok(())
     }
 
@@ -236,17 +284,22 @@ impl BridgeContract {
             return Err(ContractError::AmountBelowMinimum);
         }
 
-        let fee = Self::compute_fee(amount, cfg.fee_bps);
-        let net = amount - fee;
+        let fee = Self::compute_fee(env.clone(), amount, cfg.fee_bps);
+        let net = amount.checked_sub(fee).ok_or(ContractError::Overflow)?;
 
-        cfg.total_deposited += amount;
+        cfg.total_deposited = cfg
+            .total_deposited
+            .checked_add(amount)
+            .ok_or(ContractError::Overflow)?;
         Self::save_bridge(&env, &bridge_id, &cfg);
 
-        let mut d: Map<Symbol, i128> = Map::new(&env);
-        d.set(symbol_short!("amount"), amount);
-        d.set(symbol_short!("fee"), fee);
-        d.set(symbol_short!("net"), net);
-        Self::emit(&env, symbol_short!("deposit"), &bridge_id, d);
+        BridgeDepositEvent {
+            bridge_id: bridge_id.clone(),
+            amount,
+            fee,
+            net,
+        }
+        .publish(&env);
         log!(
             &env,
             "bridge_deposit {} amount={} fee={} net={}",
@@ -281,12 +334,17 @@ impl BridgeContract {
             return Err(ContractError::AmountBelowMinimum);
         }
 
-        cfg.total_withdrawn += amount;
+        cfg.total_withdrawn = cfg
+            .total_withdrawn
+            .checked_add(amount)
+            .ok_or(ContractError::Overflow)?;
         Self::save_bridge(&env, &bridge_id, &cfg);
 
-        let mut d: Map<Symbol, i128> = Map::new(&env);
-        d.set(symbol_short!("amount"), amount);
-        Self::emit(&env, symbol_short!("withdraw"), &bridge_id, d);
+        BridgeWithdrawalEvent {
+            bridge_id: bridge_id.clone(),
+            amount,
+        }
+        .publish(&env);
         log!(
             &env,
             "bridge_withdraw {} -> {} amount={}",
@@ -325,7 +383,79 @@ impl BridgeContract {
         Self::load_admin(&env)
     }
 
-    pub fn compute_fee(amount: i128, fee_bps: u64) -> i128 {
-        amount * fee_bps as i128 / 10_000
+    pub fn compute_fee(env: Env, amount: i128, fee_bps: u64) -> i128 {
+        let amount_256 = I256::from_i128(&env, amount);
+        let bps_256 = I256::from_i128(&env, fee_bps as i128);
+
+        amount_256
+            .mul(&bps_256)
+            .div(&I256::from_i128(&env, 10000))
+            .to_i128()
+            .unwrap_or(0)
+    }
+
+    // ── Upgrade Management ────────────────────────────────────────────────────
+
+    pub fn upgrade_init(
+        env: Env,
+        admin: Address,
+        current_wasm_hash: BytesN<32>,
+        required_approvals: u32,
+    ) {
+        stellarlend_common::upgrade::UpgradeManager::init(
+            env,
+            admin,
+            current_wasm_hash,
+            required_approvals,
+        );
+    }
+
+    pub fn upgrade_add_approver(env: Env, caller: Address, approver: Address) {
+        stellarlend_common::upgrade::UpgradeManager::add_approver(env, caller, approver);
+    }
+
+    pub fn upgrade_remove_approver(env: Env, caller: Address, approver: Address) {
+        stellarlend_common::upgrade::UpgradeManager::remove_approver(env, caller, approver);
+    }
+
+    pub fn upgrade_propose(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+        new_version: u32,
+    ) -> u64 {
+        stellarlend_common::upgrade::UpgradeManager::upgrade_propose(
+            env,
+            caller,
+            new_wasm_hash,
+            new_version,
+        )
+    }
+
+    pub fn upgrade_approve(env: Env, caller: Address, proposal_id: u64) -> u32 {
+        stellarlend_common::upgrade::UpgradeManager::upgrade_approve(env, caller, proposal_id)
+    }
+
+    pub fn upgrade_execute(env: Env, caller: Address, proposal_id: u64) {
+        stellarlend_common::upgrade::UpgradeManager::upgrade_execute(env, caller, proposal_id);
+    }
+
+    pub fn upgrade_rollback(env: Env, caller: Address, proposal_id: u64) {
+        stellarlend_common::upgrade::UpgradeManager::upgrade_rollback(env, caller, proposal_id);
+    }
+
+    pub fn upgrade_status(
+        env: Env,
+        proposal_id: u64,
+    ) -> stellarlend_common::upgrade::UpgradeStatus {
+        stellarlend_common::upgrade::UpgradeManager::upgrade_status(env, proposal_id)
+    }
+
+    pub fn current_wasm_hash(env: Env) -> BytesN<32> {
+        stellarlend_common::upgrade::UpgradeManager::current_wasm_hash(env)
+    }
+
+    pub fn current_version(env: Env) -> u32 {
+        stellarlend_common::upgrade::UpgradeManager::current_version(env)
     }
 }

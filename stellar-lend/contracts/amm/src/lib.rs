@@ -12,20 +12,76 @@
 
 #![no_std]
 #![allow(clippy::too_many_arguments)]
-use soroban_sdk::{contract, contractimpl, Address, Env, Map};
+use soroban_sdk::{contract, contractimpl, Address, BytesN, Env, Map};
 
-mod amm;
-use amm::{
+pub mod amm;
+pub use crate::amm::{
     add_amm_protocol, add_liquidity, auto_swap_for_collateral, execute_swap,
     initialize_amm_settings, remove_liquidity, update_amm_settings, validate_amm_callback,
     AmmCallbackData, AmmError, AmmProtocolConfig, AmmSettings, LiquidityParams, SwapParams,
+    TokenPair,
 };
+
+use stellarlend_common::upgrade;
 
 #[contract]
 pub struct AmmContract;
 
 #[contractimpl]
 impl AmmContract {
+    // ───────────────────────────────────────────────────
+    // Upgrade Management
+    // ───────────────────────────────────────────────────
+
+    pub fn upgrade_init(
+        env: Env,
+        admin: Address,
+        current_wasm_hash: BytesN<32>,
+        required_approvals: u32,
+    ) {
+        upgrade::UpgradeManager::init(env, admin, current_wasm_hash, required_approvals);
+    }
+
+    pub fn upgrade_add_approver(env: Env, caller: Address, approver: Address) {
+        upgrade::UpgradeManager::add_approver(env, caller, approver);
+    }
+
+    pub fn upgrade_remove_approver(env: Env, caller: Address, approver: Address) {
+        upgrade::UpgradeManager::remove_approver(env, caller, approver);
+    }
+
+    pub fn upgrade_propose(
+        env: Env,
+        caller: Address,
+        new_wasm_hash: BytesN<32>,
+        new_version: u32,
+    ) -> u64 {
+        upgrade::UpgradeManager::upgrade_propose(env, caller, new_wasm_hash, new_version)
+    }
+
+    pub fn upgrade_approve(env: Env, caller: Address, proposal_id: u64) -> u32 {
+        upgrade::UpgradeManager::upgrade_approve(env, caller, proposal_id)
+    }
+
+    pub fn upgrade_execute(env: Env, caller: Address, proposal_id: u64) {
+        upgrade::UpgradeManager::upgrade_execute(env, caller, proposal_id);
+    }
+
+    pub fn upgrade_rollback(env: Env, caller: Address, proposal_id: u64) {
+        upgrade::UpgradeManager::upgrade_rollback(env, caller, proposal_id);
+    }
+
+    pub fn upgrade_status(env: Env, proposal_id: u64) -> upgrade::UpgradeStatus {
+        upgrade::UpgradeManager::upgrade_status(env, proposal_id)
+    }
+
+    pub fn current_wasm_hash(env: Env) -> BytesN<32> {
+        upgrade::UpgradeManager::current_wasm_hash(env)
+    }
+
+    pub fn current_version(env: Env) -> u32 {
+        upgrade::UpgradeManager::current_version(env)
+    }
     /// Initialize AMM settings (admin only)
     ///
     /// Sets up AMM integration parameters including slippage tolerances and thresholds.
@@ -282,5 +338,11 @@ impl AmmContract {
     }
 }
 
+// Liquidation integration tests require lending crate; enable with feature "liquidate_integration"
+// when lending is available as a dependency.
+#[cfg(all(test, feature = "liquidate_integration"))]
+mod liquidate_test;
+#[cfg(test)]
+mod math_safety_test;
 #[cfg(test)]
 mod test;

@@ -18,6 +18,10 @@
 //! - Only the admin address can modify risk parameters.
 
 #![allow(unused)]
+use crate::events::{
+    emit_admin_action, emit_pause_state_changed, emit_risk_params_updated, AdminActionEvent,
+    PauseStateChangedEvent, RiskParamsUpdatedEvent,
+};
 use soroban_sdk::{contracterror, contracttype, Address, Env, IntoVal, Map, Symbol, Val, Vec};
 
 /// Errors that can occur during risk management operations
@@ -49,38 +53,32 @@ pub enum RiskManagementError {
     Overflow = 11,
     /// Action requires governance approval
     GovernanceRequired = 12,
+    /// Contract has already been initialized
+    AlreadyInitialized = 13,
 }
 /// Storage keys for risk management data
 #[contracttype]
 #[derive(Clone)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
 pub enum RiskDataKey {
-    /// Risk configuration parameters
+    /// Global risk configuration parameters (MCR, liquidation threshold, etc.)
+    /// Value type: RiskConfig
     RiskConfig,
-    /// Admin address
+    /// Protocol admin address authorized for risk management
+    /// Value type: Address
     Admin,
-    /// Emergency pause flag
+    /// Global emergency pause flag. If true, all protocol operations are halted.
+    /// Value type: bool
     EmergencyPause,
-    /// Parameter change timelock (for safety)
+    /// Timelock for safety of sensitive parameter changes
+    /// Value type: u64 (timestamp)
     ParameterChangeTimelock,
 }
 
-/// Risk configuration parameters
+/// Risk configuration parameters for pause switches
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct RiskConfig {
-    /// Minimum collateral ratio (in basis points, e.g., 11000 = 110%)
-    /// Users must maintain this ratio or face liquidation
-    pub min_collateral_ratio: i128,
-    /// Liquidation threshold (in basis points, e.g., 10500 = 105%)
-    /// When collateral ratio falls below this, liquidation is allowed
-    pub liquidation_threshold: i128,
-    /// Close factor (in basis points, e.g., 5000 = 50%)
-    /// Maximum percentage of debt that can be liquidated in a single transaction
-    pub close_factor: i128,
-    /// Liquidation incentive (in basis points, e.g., 1000 = 10%)
-    /// Bonus given to liquidators
-    pub liquidation_incentive: i128,
     /// Pause switches for different operations
     pub pause_switches: Map<Symbol, bool>,
     /// Last update timestamp
@@ -105,18 +103,6 @@ pub enum PauseOperation {
     All,
 }
 
-/// Constants for parameter validation
-const BASIS_POINTS_SCALE: i128 = 10_000; // 100% = 10,000 basis points
-const MIN_COLLATERAL_RATIO_MIN: i128 = 10_000; // 100% minimum
-const MIN_COLLATERAL_RATIO_MAX: i128 = 50_000; // 500% maximum
-const LIQUIDATION_THRESHOLD_MIN: i128 = 10_000; // 100% minimum
-const LIQUIDATION_THRESHOLD_MAX: i128 = 50_000; // 500% maximum
-const CLOSE_FACTOR_MIN: i128 = 0; // 0% minimum
-const CLOSE_FACTOR_MAX: i128 = BASIS_POINTS_SCALE; // 100% maximum
-const LIQUIDATION_INCENTIVE_MIN: i128 = 0; // 0% minimum
-const LIQUIDATION_INCENTIVE_MAX: i128 = 5_000; // 50% maximum (safety limit)
-const MAX_PARAMETER_CHANGE_BPS: i128 = 1_000; // 10% maximum change per update
-
 /// Initialize risk management system
 ///
 /// Sets up default risk parameters and admin address.
@@ -132,22 +118,21 @@ const MAX_PARAMETER_CHANGE_BPS: i128 = 1_000; // 10% maximum change per update
 /// # Errors
 /// * `RiskManagementError::InvalidParameter` - If default parameters are invalid
 pub fn initialize_risk_management(env: &Env, admin: Address) -> Result<(), RiskManagementError> {
+    // Check if initialized
+    let config_key = RiskDataKey::RiskConfig;
+    if env.storage().persistent().has(&config_key) {
+        return Ok(());
+    }
+
     // Set admin
-    let admin_key = RiskDataKey::Admin;
+    let admin_key = crate::storage::GovernanceDataKey::Admin;
     env.storage().persistent().set(&admin_key, &admin);
 
-    // Initialize default risk config
+    // Initialize default risk config for pause switches
     let default_config = RiskConfig {
-        min_collateral_ratio: 11_000,  // 110% default
-        liquidation_threshold: 10_500, // 105% default
-        close_factor: 5_000,           // 50% default
-        liquidation_incentive: 1_000,  // 10% default
         pause_switches: create_default_pause_switches(env),
         last_update: env.ledger().timestamp(),
     };
-
-    // Validate default config
-    validate_risk_config(&default_config)?;
 
     let config_key = RiskDataKey::RiskConfig;
     env.storage().persistent().set(&config_key, &default_config);
@@ -155,6 +140,15 @@ pub fn initialize_risk_management(env: &Env, admin: Address) -> Result<(), RiskM
     // Initialize emergency pause as false
     let emergency_key = RiskDataKey::EmergencyPause;
     env.storage().persistent().set(&emergency_key, &false);
+
+    emit_admin_action(
+        env,
+        AdminActionEvent {
+            actor: admin.clone(),
+            action: Symbol::new(env, "initialize"),
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 
     Ok(())
 }
@@ -170,21 +164,15 @@ fn create_default_pause_switches(env: &Env) -> Map<Symbol, bool> {
     switches
 }
 
-/// Get the admin address
+/// Get the admin address (deprecated, delegates to new admin module)
+#[deprecated(note = "Use crate::admin::get_admin instead")]
 pub fn get_admin(env: &Env) -> Option<Address> {
-    let admin_key = RiskDataKey::Admin;
-    env.storage()
-        .persistent()
-        .get::<RiskDataKey, Address>(&admin_key)
+    crate::admin::get_admin(env)
 }
 
-/// Check if caller is admin
+/// Check if caller is admin (delegates to new admin module)
 pub fn require_admin(env: &Env, caller: &Address) -> Result<(), RiskManagementError> {
-    let admin = get_admin(env).ok_or(RiskManagementError::Unauthorized)?;
-    if admin != *caller {
-        return Err(RiskManagementError::Unauthorized);
-    }
-    Ok(())
+    crate::admin::require_admin(env, caller).map_err(|_| RiskManagementError::Unauthorized)
 }
 
 /// Get current risk configuration
@@ -193,133 +181,6 @@ pub fn get_risk_config(env: &Env) -> Option<RiskConfig> {
     env.storage()
         .persistent()
         .get::<RiskDataKey, RiskConfig>(&config_key)
-}
-
-/// Set risk parameters (admin only)
-///
-/// Updates risk parameters with validation and change limits.
-///
-/// # Arguments
-/// * `env` - The Soroban environment
-/// * `caller` - The caller address (must be admin)
-/// * `min_collateral_ratio` - New minimum collateral ratio (in basis points)
-/// * `liquidation_threshold` - New liquidation threshold (in basis points)
-/// * `close_factor` - New close factor (in basis points)
-/// * `liquidation_incentive` - New liquidation incentive (in basis points)
-///
-/// # Returns
-/// Returns Ok(()) on success
-///
-/// # Errors
-/// * `RiskManagementError::Unauthorized` - If caller is not admin
-/// * `RiskManagementError::InvalidParameter` - If parameters are invalid
-/// * `RiskManagementError::ParameterChangeTooLarge` - If change exceeds maximum allowed
-pub fn set_risk_params(
-    env: &Env,
-    caller: Address,
-    min_collateral_ratio: Option<i128>,
-    liquidation_threshold: Option<i128>,
-    close_factor: Option<i128>,
-    liquidation_incentive: Option<i128>,
-) -> Result<(), RiskManagementError> {
-    // Check admin
-    require_admin(env, &caller)?;
-
-    // Check emergency pause
-    check_emergency_pause(env)?;
-
-    // Get current config
-    let mut config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-
-    // Update parameters if provided
-    if let Some(mcr) = min_collateral_ratio {
-        validate_parameter_change(config.min_collateral_ratio, mcr)?;
-        config.min_collateral_ratio = mcr;
-    }
-
-    if let Some(lt) = liquidation_threshold {
-        validate_parameter_change(config.liquidation_threshold, lt)?;
-        config.liquidation_threshold = lt;
-    }
-
-    if let Some(cf) = close_factor {
-        validate_parameter_change(config.close_factor, cf)?;
-        config.close_factor = cf;
-    }
-
-    if let Some(li) = liquidation_incentive {
-        validate_parameter_change(config.liquidation_incentive, li)?;
-        config.liquidation_incentive = li;
-    }
-
-    // Validate the updated config
-    validate_risk_config(&config)?;
-
-    // Update timestamp
-    config.last_update = env.ledger().timestamp();
-
-    // Save config
-    let config_key = RiskDataKey::RiskConfig;
-    env.storage().persistent().set(&config_key, &config);
-
-    // Emit event
-    emit_risk_params_updated_event(env, &caller, &config);
-
-    Ok(())
-}
-
-/// Validate risk configuration
-fn validate_risk_config(config: &RiskConfig) -> Result<(), RiskManagementError> {
-    // Validate min collateral ratio
-    if config.min_collateral_ratio < MIN_COLLATERAL_RATIO_MIN
-        || config.min_collateral_ratio > MIN_COLLATERAL_RATIO_MAX
-    {
-        return Err(RiskManagementError::InvalidParameter);
-    }
-
-    // Validate liquidation threshold
-    if config.liquidation_threshold < LIQUIDATION_THRESHOLD_MIN
-        || config.liquidation_threshold > LIQUIDATION_THRESHOLD_MAX
-    {
-        return Err(RiskManagementError::InvalidLiquidationThreshold);
-    }
-
-    // Validate that min collateral ratio >= liquidation threshold
-    if config.min_collateral_ratio < config.liquidation_threshold {
-        return Err(RiskManagementError::InvalidCollateralRatio);
-    }
-
-    // Validate close factor
-    if config.close_factor < CLOSE_FACTOR_MIN || config.close_factor > CLOSE_FACTOR_MAX {
-        return Err(RiskManagementError::InvalidCloseFactor);
-    }
-
-    // Validate liquidation incentive
-    if config.liquidation_incentive < LIQUIDATION_INCENTIVE_MIN
-        || config.liquidation_incentive > LIQUIDATION_INCENTIVE_MAX
-    {
-        return Err(RiskManagementError::InvalidLiquidationIncentive);
-    }
-
-    Ok(())
-}
-
-/// Validate parameter change doesn't exceed maximum allowed change
-fn validate_parameter_change(old_value: i128, new_value: i128) -> Result<(), RiskManagementError> {
-    let change = if new_value > old_value {
-        new_value - old_value
-    } else {
-        old_value - new_value
-    };
-
-    // Calculate maximum allowed change (10% of old value)
-    let max_change = (old_value * MAX_PARAMETER_CHANGE_BPS) / BASIS_POINTS_SCALE;
-
-    if change > max_change {
-        return Err(RiskManagementError::ParameterChangeTooLarge);
-    }
-
-    Ok(())
 }
 
 /// Set pause switches (admin only)
@@ -480,198 +341,43 @@ pub fn check_emergency_pause(env: &Env) -> Result<(), RiskManagementError> {
     Ok(())
 }
 
-/// Check if user meets minimum collateral ratio requirement
-///
-/// # Arguments
-/// * `env` - The Soroban environment
-/// * `collateral_value` - Total collateral value (in base units)
-/// * `debt_value` - Total debt value (in base units)
-///
-/// # Returns
-/// Returns Ok(()) if ratio is sufficient, Err otherwise
-pub fn require_min_collateral_ratio(
-    env: &Env,
-    collateral_value: i128,
-    debt_value: i128,
-) -> Result<(), RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-
-    // If no debt, ratio is infinite (always valid)
-    if debt_value == 0 {
-        return Ok(());
-    }
-
-    // Calculate collateral ratio: (collateral / debt) * 10000 (basis points)
-    let ratio = (collateral_value * BASIS_POINTS_SCALE)
-        .checked_div(debt_value)
-        .ok_or(RiskManagementError::Overflow)?;
-
-    // Check if ratio meets minimum
-    if ratio < config.min_collateral_ratio {
-        return Err(RiskManagementError::InsufficientCollateralRatio);
-    }
-
-    Ok(())
-}
-
-/// Check if position can be liquidated
-///
-/// Returns true if collateral ratio is below liquidation threshold.
-///
-/// # Arguments
-/// * `env` - The Soroban environment
-/// * `collateral_value` - Total collateral value (in base units)
-/// * `debt_value` - Total debt value (in base units)
-///
-/// # Returns
-/// Returns true if position can be liquidated
-pub fn can_be_liquidated(
-    env: &Env,
-    collateral_value: i128,
-    debt_value: i128,
-) -> Result<bool, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-
-    // If no debt, cannot be liquidated
-    if debt_value == 0 {
-        return Ok(false);
-    }
-
-    // Calculate collateral ratio
-    let ratio = (collateral_value * BASIS_POINTS_SCALE)
-        .checked_div(debt_value)
-        .ok_or(RiskManagementError::Overflow)?;
-
-    // Can be liquidated if ratio < liquidation threshold
-    Ok(ratio < config.liquidation_threshold)
-}
-
-/// Calculate maximum liquidatable amount
-///
-/// Uses close factor to determine maximum debt that can be liquidated.
-///
-/// # Arguments
-/// * `env` - The Soroban environment
-/// * `debt_value` - Total debt value (in base units)
-///
-/// # Returns
-/// Maximum amount that can be liquidated
-pub fn get_max_liquidatable_amount(
-    env: &Env,
-    debt_value: i128,
-) -> Result<i128, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-
-    // Calculate: debt * close_factor / BASIS_POINTS_SCALE
-    let max_amount = (debt_value * config.close_factor)
-        .checked_div(BASIS_POINTS_SCALE)
-        .ok_or(RiskManagementError::Overflow)?;
-
-    Ok(max_amount)
-}
-
-/// Calculate liquidation incentive amount
-///
-/// Returns the bonus amount for liquidators.
-///
-/// # Arguments
-/// * `env` - The Soroban environment
-/// * `liquidated_amount` - Amount being liquidated (in base units)
-///
-/// # Returns
-/// Liquidation incentive amount
-pub fn get_liquidation_incentive_amount(
-    env: &Env,
-    liquidated_amount: i128,
-) -> Result<i128, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-
-    // Calculate: amount * liquidation_incentive / BASIS_POINTS_SCALE
-    let incentive = (liquidated_amount * config.liquidation_incentive)
-        .checked_div(BASIS_POINTS_SCALE)
-        .ok_or(RiskManagementError::Overflow)?;
-
-    Ok(incentive)
-}
-
-/// Get minimum collateral ratio
-pub fn get_min_collateral_ratio(env: &Env) -> Result<i128, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-    Ok(config.min_collateral_ratio)
-}
-
-/// Get liquidation threshold
-pub fn get_liquidation_threshold(env: &Env) -> Result<i128, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-    Ok(config.liquidation_threshold)
-}
-
-/// Get close factor
-pub fn get_close_factor(env: &Env) -> Result<i128, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-    Ok(config.close_factor)
-}
-
-/// Get liquidation incentive
-pub fn get_liquidation_incentive(env: &Env) -> Result<i128, RiskManagementError> {
-    let config = get_risk_config(env).ok_or(RiskManagementError::InvalidParameter)?;
-    Ok(config.liquidation_incentive)
-}
-
-/// Emit risk parameters updated event
-fn emit_risk_params_updated_event(env: &Env, caller: &Address, config: &RiskConfig) {
-    let topics = (Symbol::new(env, "risk_params_updated"), caller.clone());
-    let mut data: Vec<Val> = Vec::new(env);
-    data.push_back(Symbol::new(env, "caller").into_val(env));
-    data.push_back(caller.clone().into_val(env));
-    data.push_back(Symbol::new(env, "min_collateral_ratio").into_val(env));
-    data.push_back(config.min_collateral_ratio.into_val(env));
-    data.push_back(Symbol::new(env, "liquidation_threshold").into_val(env));
-    data.push_back(config.liquidation_threshold.into_val(env));
-    data.push_back(Symbol::new(env, "close_factor").into_val(env));
-    data.push_back(config.close_factor.into_val(env));
-    data.push_back(Symbol::new(env, "liquidation_incentive").into_val(env));
-    data.push_back(config.liquidation_incentive.into_val(env));
-    data.push_back(Symbol::new(env, "timestamp").into_val(env));
-    data.push_back(config.last_update.into_val(env));
-
-    env.events().publish(topics, data);
-}
-
 /// Emit pause switch updated event
 fn emit_pause_switch_updated_event(env: &Env, caller: &Address, operation: &Symbol, paused: bool) {
-    let topics = (Symbol::new(env, "pause_switch_updated"), caller.clone());
-    let mut data: Vec<Val> = Vec::new(env);
-    data.push_back(Symbol::new(env, "caller").into_val(env));
-    data.push_back(caller.clone().into_val(env));
-    data.push_back(Symbol::new(env, "operation").into_val(env));
-    data.push_back(operation.clone().into_val(env));
-    data.push_back(Symbol::new(env, "paused").into_val(env));
-    data.push_back(paused.into_val(env));
-
-    env.events().publish(topics, data);
+    emit_pause_state_changed(
+        env,
+        PauseStateChangedEvent {
+            actor: caller.clone(),
+            operation: operation.clone(),
+            paused,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 }
 
 /// Emit pause switches updated event
 fn emit_pause_switches_updated_event(env: &Env, caller: &Address, switches: &Map<Symbol, bool>) {
-    let topics = (Symbol::new(env, "pause_switches_updated"), caller.clone());
-    let mut data: Vec<Val> = Vec::new(env);
-    data.push_back(Symbol::new(env, "caller").into_val(env));
-    data.push_back(caller.clone().into_val(env));
-    data.push_back(Symbol::new(env, "switches").into_val(env));
-    data.push_back(switches.clone().into_val(env));
-
-    env.events().publish(topics, data);
+    for (operation, paused) in switches.iter() {
+        emit_pause_state_changed(
+            env,
+            PauseStateChangedEvent {
+                actor: caller.clone(),
+                operation,
+                paused,
+                timestamp: env.ledger().timestamp(),
+            },
+        );
+    }
 }
 
 /// Emit emergency pause event
 fn emit_emergency_pause_event(env: &Env, caller: &Address, paused: bool) {
-    let topics = (Symbol::new(env, "emergency_pause"), caller.clone());
-    let mut data: Vec<Val> = Vec::new(env);
-    data.push_back(Symbol::new(env, "caller").into_val(env));
-    data.push_back(caller.clone().into_val(env));
-    data.push_back(Symbol::new(env, "paused").into_val(env));
-    data.push_back(paused.into_val(env));
-
-    env.events().publish(topics, data);
+    emit_pause_state_changed(
+        env,
+        PauseStateChangedEvent {
+            actor: caller.clone(),
+            operation: Symbol::new(env, "emergency"),
+            paused,
+            timestamp: env.ledger().timestamp(),
+        },
+    );
 }

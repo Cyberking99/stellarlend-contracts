@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use crate::bridge::*;
 use soroban_sdk::{testutils::Address as _, Address, Env, String};
 
@@ -348,23 +346,26 @@ fn old_admin_loses_rights_after_transfer() {
 
 #[test]
 fn compute_fee_normal() {
-    // 1_000_000 * 50 / 10_000 = 5_000
-    assert_eq!(BridgeContract::compute_fee(1_000_000, 50), 5_000);
+    let env = Env::default();
+    assert_eq!(BridgeContract::compute_fee(env, 1_000_000, 50), 5_000);
 }
 
 #[test]
 fn compute_fee_rounds_down() {
+    let env = Env::default();
     // 999 * 10 / 10_000 = 0
-    assert_eq!(BridgeContract::compute_fee(999, 10), 0);
+    assert_eq!(BridgeContract::compute_fee(env, 999, 10), 0);
 }
 
 #[test]
 fn compute_fee_zero_rate() {
-    assert_eq!(BridgeContract::compute_fee(1_000_000, 0), 0);
+    let env = Env::default();
+    assert_eq!(BridgeContract::compute_fee(env, 1_000_000, 0), 0);
 }
 
 #[test]
 fn compute_fee_max_rate() {
+    let env = Env::default();
     // 100_000 * 1_000 / 10_000 = 10_000
-    assert_eq!(BridgeContract::compute_fee(100_000, 1_000), 10_000);
+    assert_eq!(BridgeContract::compute_fee(env, 100_000, 1_000), 10_000);
 }
