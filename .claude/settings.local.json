@@ -5,7 +5,9 @@
       "Bash(rustup target:*)",
       "Bash(cargo test:*)",
       "Bash(find:*)",
-      "Bash(grep -v \"^--$\")"
+      "Bash(grep -v \"^--$\")",
+      "Bash(cargo install:*)",
+      "Bash(cargo tarpaulin:*)"
     ],
     "deny": [],
     "ask": []
