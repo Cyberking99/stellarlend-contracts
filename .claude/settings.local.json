@@ -9,7 +9,8 @@
       "Bash(cargo install:*)",
       "Bash(cargo tarpaulin:*)",
       "Bash(cargo fmt:*)",
-      "Bash(cargo clippy:*)"
+      "Bash(cargo clippy:*)",
+      "Bash(wc -l /Users/0xkodesage/Desktop/stellarlend-contracts/stellar-lend/contracts/hello-world/src/*.rs)"
     ],
     "deny": [],
     "ask": []

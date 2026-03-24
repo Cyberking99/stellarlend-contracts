@@ -42,9 +42,10 @@ use crate::bridge::{BridgeConfig, BridgeError};
 use crate::config::{config_backup, config_get, config_restore, config_set, ConfigError};
 use crate::config_snapshot::{get_config_snapshot, ConfigSnapshot};
 use crate::cross_asset::{
-    get_asset_config_by_address, get_asset_list, get_user_asset_position,
-    get_user_position_summary, initialize_asset, update_asset_config, update_asset_price,
-    AssetConfig, AssetKey, AssetPosition, CrossAssetError, UserPositionSummary,
+    get_asset_config_by_address, get_asset_list, get_total_borrow_for, get_total_supply_for,
+    get_user_asset_position, get_user_position_summary, initialize_asset, update_asset_config,
+    update_asset_price, AssetConfig, AssetKey, AssetPosition, CrossAssetError,
+    UserPositionSummary,
 };
 use crate::deposit::{DepositDataKey, ProtocolAnalytics};
 use crate::flash_loan::{
@@ -888,6 +889,16 @@ impl HelloContract {
         user: Address,
     ) -> Result<UserPositionSummary, CrossAssetError> {
         get_user_position_summary(&env, &user)
+    }
+
+    /// Get total supply for a specific asset.
+    pub fn get_total_supply_for(env: Env, asset: Option<Address>) -> i128 {
+        get_total_supply_for(&env, asset)
+    }
+
+    /// Get total borrows for a specific asset.
+    pub fn get_total_borrow_for(env: Env, asset: Option<Address>) -> i128 {
+        get_total_borrow_for(&env, asset)
     }
 
     // ============================================================================
