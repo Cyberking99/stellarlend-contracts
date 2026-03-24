@@ -1,6 +1,6 @@
 #![cfg(test)]
 
-use crate::governance::GovernanceError;
+use crate::errors::GovernanceError;
 use crate::recovery::{get_guardian_threshold, get_guardians, set_guardians};
 use crate::HelloContract;
 use soroban_sdk::{testutils::Address as _, Address, Env, Vec};
@@ -12,7 +12,7 @@ fn setup() -> (Env, Address, Address) {
     let admin = Address::generate(&env);
     env.as_contract(&contract_id, || {
         crate::risk_management::initialize_risk_management(&env, admin.clone()).unwrap();
-        crate::governance::initialize_governance(&env, admin.clone()).unwrap();
+        crate::governance::initialize(&env, admin.clone()).unwrap();
     });
     (env, contract_id, admin)
 }
