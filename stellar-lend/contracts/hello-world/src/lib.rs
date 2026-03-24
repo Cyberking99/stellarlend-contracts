@@ -51,7 +51,8 @@ use crate::flash_loan::{
     configure_flash_loan, execute_flash_loan, repay_flash_loan, set_flash_loan_fee, FlashLoanConfig,
 };
 use crate::interest_rate::{
-    initialize_interest_rate_config, update_interest_rate_config, InterestRateError,
+    initialize_interest_rate_config, update_interest_rate_config, InterestRateConfig,
+    InterestRateError,
 };
 use crate::liquidate::liquidate;
 use crate::oracle::OracleConfig;
@@ -389,6 +390,30 @@ impl HelloContract {
             spread,
         )
         .map_err(|_| RiskManagementError::InvalidParameter)
+    }
+
+    /// Get current protocol utilization in basis points (0–10 000).
+    pub fn get_utilization(env: Env) -> i128 {
+        interest_rate::calculate_utilization(&env).unwrap_or(0)
+    }
+
+    /// Set an emergency rate adjustment (admin only).
+    ///
+    /// The adjustment is added to the calculated borrow rate.
+    /// Bounded to ±10 000 bps (±100%).
+    pub fn set_emergency_rate_adjustment(
+        env: Env,
+        admin: Address,
+        adjustment_bps: i128,
+    ) -> Result<(), RiskManagementError> {
+        require_admin(&env, &admin)?;
+        interest_rate::set_emergency_rate_adjustment(&env, admin, adjustment_bps)
+            .map_err(|_| RiskManagementError::InvalidParameter)
+    }
+
+    /// Get the current interest rate configuration.
+    pub fn get_interest_rate_config(env: Env) -> Option<InterestRateConfig> {
+        interest_rate::get_interest_rate_config(&env)
     }
 
     /// Check if a position meets minimum collateral ratio.

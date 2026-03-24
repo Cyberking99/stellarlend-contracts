@@ -33,7 +33,7 @@ pub mod withdraw_test;
 // pub mod events_test;
 // pub mod integration_test;      // wrong arg counts
 // pub mod interest_accrual_test;
-// pub mod interest_rate_test;    // wrong API
+pub mod interest_rate_test;    // re-enabled: API aligned with new entrypoints
 // pub mod liquidate_test;
 // pub mod multisig_governance_execution_test; // private governance types + missing functions
 // pub mod pause_test;            // set_pause_switches API mismatch
@@ -44,6 +44,6 @@ pub mod withdraw_test;
 // pub mod test;                  // inline pub mod inside function body (merge artifact)
 // pub mod test_cross_asset;
 // pub mod test_cross_asset_borrow_repay_edge_cases;
-// pub mod test_helpers;
+pub mod test_helpers;
 // pub mod views_test;
 // pub mod fees_test;
