@@ -1,3 +1,5 @@
+#![allow(clippy::enum_variant_names)]
+
 use soroban_sdk::{
     contracterror, contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Vec,
 };
@@ -49,9 +51,7 @@ pub struct UpgradeStatus {
     pub target_version: u32,
 }
 
-// The `Up` prefix is intentional: it namespaces these storage keys to prevent
 // collisions with other contracts sharing the same Soroban persistent storage.
-#[allow(clippy::enum_variant_names)]
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum UpgradeKey {
