@@ -207,3 +207,67 @@ fn test_overflow_protection() {
     );
     assert_eq!(result, Err(Ok(BorrowError::Overflow)));
 }
+
+#[test]
+fn test_coverage_boost_lib() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, user, asset, _) = setup_test(&env);
+
+    // Hit get_performance_stats
+    let _stats = client.get_performance_stats();
+
+    // Hit get_admin
+    assert_eq!(client.get_admin(), Some(admin.clone()));
+    
+    // Hit data_store methods via lib
+    client.data_store_init(&admin);
+    client.data_store_init(&admin); // double to hit early return
+    client.data_grant_writer(&admin, &user);
+    client.data_revoke_writer(&admin, &user);
+    let _ = client.data_key_exists(&soroban_sdk::String::from_str(&env, "test"));
+    
+    // Note: deposit paused
+    client.set_pause(&admin, &PauseType::Deposit, &true);
+    let dep_res = client.try_deposit(&user, &asset, &100);
+    assert_eq!(dep_res, Err(Ok(DepositError::DepositPaused)));
+    
+    let dep_res2 = client.try_deposit_collateral(&user, &asset, &100);
+    assert_eq!(dep_res2, Err(Ok(BorrowError::ProtocolPaused)));
+    
+    // Repay paused
+    client.set_pause(&admin, &PauseType::Repay, &true);
+    let rep_res = client.try_repay(&user, &asset, &100);
+    assert_eq!(rep_res, Err(Ok(BorrowError::ProtocolPaused)));
+    
+    // Liquidate paused
+    client.set_pause(&admin, &PauseType::Liquidation, &true);
+    let liq_res = client.try_liquidate(&admin, &user, &asset, &asset, &100);
+    assert_eq!(liq_res, Err(Ok(BorrowError::ProtocolPaused)));
+}
+
+#[test]
+fn test_coverage_boost_pause() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, user, _asset, _) = setup_test(&env);
+    
+    // Emergency states
+    assert_eq!(client.get_emergency_state(), EmergencyState::Normal);
+    
+    // Setup guardian
+    client.set_guardian(&admin, &user);
+    assert_eq!(client.get_guardian(), Some(user.clone()));
+    
+    // trigger shutdown
+    client.emergency_shutdown(&user); // caller is guardian
+    assert_eq!(client.get_emergency_state(), EmergencyState::Shutdown);
+    
+    // try recovery
+    client.start_recovery(&admin);
+    assert_eq!(client.get_emergency_state(), EmergencyState::Recovery);
+    
+    // Complete recovery
+    client.complete_recovery(&admin);
+    assert_eq!(client.get_emergency_state(), EmergencyState::Normal);
+}
