@@ -264,7 +264,7 @@ fn test_coverage_extremes() {
     let env = Env::default();
     env.mock_all_auths();
     let (client, admin, user, asset, _) = setup_test(&env);
-    
+
     // 1. View Error Paths (Oracle zero/negative)
     // We can't easily mock the oracle to return 0 mid-test without registering a new one
     // but we can try to hit the "unconfigured" or "invalid" paths.
@@ -279,16 +279,16 @@ fn test_coverage_extremes() {
     let massive_debt = Bytes::from_array(&env, &[0xFF; 16]); // i128::MAX approx
     client.data_grant_writer(&admin, &admin);
     // The key for user debt in borrow module is BorrowDataKey::BorrowUserDebt(user)
-    // We'd need to know the exact serialization. 
+    // We'd need to know the exact serialization.
     // Instead, let's just use regular borrow with a very large amount if ceiling allows.
     client.initialize_borrow_settings(&i128::MAX, &1);
     client.borrow(&user, &asset, &1_000_000_000, &asset, &2_000_000_000);
-    
+
     // 3. Upgrade Branch Coverage
     let hash = BytesN::from_array(&env, &[1; 32]);
     let pid = client.upgrade_propose(&admin, &hash, &100);
     let _ = client.upgrade_status(&pid);
-    
+
     // Trigger some internal view branches
     let _ = client.get_user_position(&user);
     let _ = client.get_liquidation_incentive_amount(&1_000_000);
