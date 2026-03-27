@@ -22,3 +22,14 @@ This contract exposes the core API for StellarLend, including lending/borrowing,
 
 Refer to `src/lib.rs` for detailed types and events.
 
+## Zero-Amount Semantics
+
+User entrypoints that move value treat zero and negative amounts as invalid
+requests. `deposit_collateral`, `withdraw_collateral`, `borrow_asset`,
+`repay_debt`, and `liquidate` are expected to return their typed
+`InvalidAmount` errors without mutating balances, positions, analytics, or
+triggering token transfers.
+
+See [`docs/ZERO_AMOUNT_SEMANTICS.md`](../../../docs/ZERO_AMOUNT_SEMANTICS.md)
+for the full matrix and security notes covering trust boundaries, admin and
+guardian powers, reentrancy posture, and token transfer ordering.

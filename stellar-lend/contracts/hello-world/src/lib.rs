@@ -1438,8 +1438,8 @@ mod tests;
 #[cfg(test)]
 mod test_reentrancy;
 
-// #[cfg(test)]
-// mod test_zero_amount;
+#[cfg(test)]
+mod test_zero_amount;
 
 // #[cfg(test)]
 // mod flash_loan_test;
