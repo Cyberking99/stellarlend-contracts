@@ -455,21 +455,6 @@ fn test_withdraw_deposit_withdraw_cycle() {
     let pos = client.get_user_collateral_deposit(&user, &asset);
     assert_eq!(pos.amount, 0);
 }
-// --- Uninitialized defaults ---
-
-#[test]
-fn test_withdraw_uninitialized_defaults() {
-    let (env, client) = setup_env();
-    let user = Address::generate(&env);
-    let asset = Address::generate(&env);
-
-    // No initialization done — everything should default
-    // Deposit 10,000 manually into storage to bypass init checks for this specific test
-    // Actually, it's easier to just test that they return default values.
-
-    // Test that is_paused() defaults to false, min_withdraw defaults to 0, etc.
-    // We already have setup_env() which registers the contract.
-}
 
 #[test]
 fn test_withdraw_global_pause() {
