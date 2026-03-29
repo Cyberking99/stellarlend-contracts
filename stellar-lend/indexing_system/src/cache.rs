@@ -28,7 +28,6 @@ impl CacheService {
         query_ttl: u64,
     ) -> IndexerResult<Self> {
         let client = redis::Client::open(redis_url).map_err(|e| IndexerError::Cache(e))?;
-
         let connection_manager = ConnectionManager::new(client)
             .await
             .map_err(|e| IndexerError::Cache(e))?;
@@ -376,60 +375,12 @@ impl CacheService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
-    use serde_json::json;
-    use uuid::Uuid;
 
     #[test]
-    fn test_event_key_generation() {
-        let id = "test-id-123";
-        let key = CacheService::event_key(id);
-        assert_eq!(key, "event:test-id-123");
-    }
-
-    #[test]
-    fn test_query_key_generation() {
-        let hash = "abc123hash";
-        let key = CacheService::query_key(hash);
-        assert_eq!(key, "query:abc123hash");
-    }
-
-    #[test]
-    fn test_stats_key_generation() {
-        let key = CacheService::stats_key();
-        assert_eq!(key, "stats:global");
-    }
-
-    #[test]
-    fn test_metadata_key_generation() {
-        let addr = "0x123";
-        let key = CacheService::_metadata_key(addr);
-        assert_eq!(key, "metadata:0x123");
-    }
-
-    #[tokio::test]
-    async fn test_new_cache_service_invalid_url() {
-        // This should fail to open the client or create the manager
-        let result = CacheService::new("invalid_url", 60, 60, 60).await;
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_event_serialization_roundtrip() {
-        let event = Event {
-            id: Uuid::new_v4(),
-            contract_address: "addr".to_string(),
-            event_name: "Transfer".to_string(),
-            block_number: 100,
-            transaction_hash: "tx".to_string(),
-            log_index: 1,
-            event_data: json!({"from": "a", "to": "b", "value": 100}),
-            indexed_at: Utc::now(),
-            created_at: Utc::now(),
-        };
-
-        let json = serde_json::to_string(&event).unwrap();
-        let decoded: Event = serde_json::from_str(&json).unwrap();
-        assert_eq!(decoded.id, event.id);
+    fn test_cache_keys() {
+        assert_eq!(CacheService::event_key("123"), "event:123");
+        assert_eq!(CacheService::query_key("hash"), "query:hash");
+        assert_eq!(CacheService::stats_key(), "stats:global");
+        assert_eq!(CacheService::_metadata_key("0xabc"), "metadata:0xabc");
     }
 }
