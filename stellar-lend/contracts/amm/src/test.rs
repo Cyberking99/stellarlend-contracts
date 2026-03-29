@@ -331,6 +331,20 @@ fn test_remove_liquidity() {
     };
     contract.add_amm_protocol(&admin, &protocol_config);
 
+    // Seed pool with an initial position so LP shares exist.
+    let seed_params = LiquidityParams {
+        protocol: protocol_addr.clone(),
+        token_a: None,
+        token_b: Some(token_b.clone()),
+        amount_a: 10_000,
+        amount_b: 10_000,
+        min_amount_a: 10_000,
+        min_amount_b: 10_000,
+        deadline: env.ledger().timestamp() + 3600,
+    };
+    let minted = contract.add_liquidity(&user, &seed_params);
+    assert_eq!(minted, 10_000);
+
     let (amount_a, amount_b) = contract.remove_liquidity(
         &user,
         &protocol_addr,
@@ -346,11 +360,84 @@ fn test_remove_liquidity() {
     assert_eq!(amount_b, 5000);
 
     let history = contract.get_liquidity_history(&Some(user), &10).unwrap();
-    assert_eq!(history.len(), 1);
+    assert_eq!(history.len(), 2);
     assert_eq!(
         history.get(0).unwrap().operation_type,
         Symbol::new(&env, "remove")
     );
+}
+
+#[test]
+fn test_add_liquidity_rounding_and_share_math() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract = create_amm_contract(&env);
+    let admin = Address::generate(&env);
+    let user = Address::generate(&env);
+    let protocol_addr = Address::generate(&env);
+    let token_b = Address::generate(&env);
+
+    contract.initialize_amm_settings(&admin, &100, &1000, &10000);
+
+    let mut supported_pairs = Vec::new(&env);
+    supported_pairs.push_back(TokenPair {
+        token_a: None,
+        token_b: Some(token_b.clone()),
+        pool_address: Address::generate(&env),
+    });
+    let protocol_config = AmmProtocolConfig {
+        protocol_address: protocol_addr.clone(),
+        protocol_name: Symbol::new(&env, "TestAMM"),
+        enabled: true,
+        fee_tier: 30,
+        min_swap_amount: 1000,
+        max_swap_amount: 1_000_000_000,
+        supported_pairs,
+    };
+    contract.add_amm_protocol(&admin, &protocol_config);
+
+    // Initial mint: floor(sqrt(100 * 400)) = 200 LP
+    let first = LiquidityParams {
+        protocol: protocol_addr.clone(),
+        token_a: None,
+        token_b: Some(token_b.clone()),
+        amount_a: 100,
+        amount_b: 400,
+        min_amount_a: 100,
+        min_amount_b: 400,
+        deadline: env.ledger().timestamp() + 3600,
+    };
+    let first_lp = contract.add_liquidity(&user, &first);
+    assert_eq!(first_lp, 200);
+
+    // Proportional mint: min(50*200/100, 150*200/400) = min(100,75) = 75 LP
+    // Burn 75 LP should return floor(75*100/200)=37 and floor(75*400/200)=150.
+    let second = LiquidityParams {
+        protocol: protocol_addr.clone(),
+        token_a: None,
+        token_b: Some(token_b),
+        amount_a: 50,
+        amount_b: 150,
+        min_amount_a: 37,
+        min_amount_b: 150,
+        deadline: env.ledger().timestamp() + 3600,
+    };
+    let second_lp = contract.add_liquidity(&user, &second);
+    assert_eq!(second_lp, 75);
+
+    let (out_a, out_b) = contract.remove_liquidity(
+        &user,
+        &protocol_addr,
+        &None,
+        &second.token_b,
+        &75,
+        &37,
+        &150,
+        &(env.ledger().timestamp() + 3600),
+    );
+    assert_eq!(out_a, 37);
+    assert_eq!(out_b, 150);
 }
 
 #[test]

@@ -69,6 +69,20 @@ pub enum AmmDataKey {
     CallbackNonces(Address),
     /// Admin address
     Admin,
+    /// Liquidity pool accounting by protocol and canonical pair
+    PoolState(Address, Option<Address>, Option<Address>),
+}
+
+/// Persistent accounting state for each AMM pool.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct PoolState {
+    /// Reserve for token_a in the canonical pair order.
+    pub reserve_a: i128,
+    /// Reserve for token_b in the canonical pair order.
+    pub reserve_b: i128,
+    /// Total LP shares minted for this pool.
+    pub total_lp_shares: i128,
 }
 
 /// AMM protocol configuration
@@ -325,6 +339,8 @@ pub fn execute_swap(env: &Env, user: Address, params: SwapParams) -> Result<i128
 /// # Returns
 /// Returns the amount of LP tokens received
 pub fn add_liquidity(env: &Env, user: Address, params: LiquidityParams) -> Result<i128, AmmError> {
+    user.require_auth();
+
     // Validate liquidity parameters
     validate_liquidity_params(env, &params)?;
 
@@ -339,8 +355,8 @@ pub fn add_liquidity(env: &Env, user: Address, params: LiquidityParams) -> Resul
     // Get AMM protocol configuration
     let protocol_config = get_amm_protocol_config(env, &params.protocol)?;
 
-    // Validate token pair is supported
-    validate_token_pair(env, &protocol_config, &params.token_a, &params.token_b)?;
+    // Validate token pair is supported and use canonical pair ordering.
+    let supported_pair = get_supported_pair(&protocol_config, &params.token_a, &params.token_b)?;
 
     // Generate callback nonce
     let nonce = generate_callback_nonce(env, &user);
@@ -359,14 +375,31 @@ pub fn add_liquidity(env: &Env, user: Address, params: LiquidityParams) -> Resul
         deadline: params.deadline,
     };
 
-    // Execute liquidity addition through AMM protocol
-    let lp_tokens = execute_amm_add_liquidity(env, &params, &callback_data)?;
+    // Execute liquidity addition through AMM protocol.
+    let (lp_tokens, used_amount_a, used_amount_b) =
+        execute_amm_add_liquidity(env, &params, &supported_pair, &callback_data)?;
 
-    // Record liquidity operation
-    record_liquidity_operation(env, &user, Symbol::new(env, "add"), &params, lp_tokens)?;
+    // Record liquidity operation with effective consumed amounts.
+    let recorded_params = LiquidityParams {
+        protocol: params.protocol.clone(),
+        token_a: supported_pair.token_a.clone(),
+        token_b: supported_pair.token_b.clone(),
+        amount_a: used_amount_a,
+        amount_b: used_amount_b,
+        min_amount_a: params.min_amount_a,
+        min_amount_b: params.min_amount_b,
+        deadline: params.deadline,
+    };
+    record_liquidity_operation(
+        env,
+        &user,
+        Symbol::new(env, "add"),
+        &recorded_params,
+        lp_tokens,
+    )?;
 
     // Emit events
-    emit_liquidity_added_event(env, &user, &params, lp_tokens);
+    emit_liquidity_added_event(env, &user, &recorded_params, lp_tokens);
     emit_amm_operation_event(
         env,
         &user,
@@ -407,6 +440,8 @@ pub fn remove_liquidity(
     min_amount_b: i128,
     deadline: u64,
 ) -> Result<(i128, i128), AmmError> {
+    user.require_auth();
+
     // Check if liquidity operations are enabled
     check_liquidity_enabled(env)?;
 
@@ -423,8 +458,8 @@ pub fn remove_liquidity(
     // Get AMM protocol configuration
     let protocol_config = get_amm_protocol_config(env, &protocol)?;
 
-    // Validate token pair is supported
-    validate_token_pair(env, &protocol_config, &token_a, &token_b)?;
+    // Validate token pair is supported and use canonical pair ordering.
+    let supported_pair = get_supported_pair(&protocol_config, &token_a, &token_b)?;
 
     // Generate callback nonce
     let nonce = generate_callback_nonce(env, &user);
@@ -447,8 +482,7 @@ pub fn remove_liquidity(
     let (amount_a, amount_b) = execute_amm_remove_liquidity(
         env,
         &protocol,
-        &token_a,
-        &token_b,
+        &supported_pair,
         lp_tokens,
         min_amount_a,
         min_amount_b,
@@ -463,8 +497,8 @@ pub fn remove_liquidity(
     // Create params for recording
     let params = LiquidityParams {
         protocol: protocol.clone(),
-        token_a: token_a.clone(),
-        token_b: token_b.clone(),
+        token_a: supported_pair.token_a.clone(),
+        token_b: supported_pair.token_b.clone(),
         amount_a,
         amount_b,
         min_amount_a,
@@ -505,6 +539,8 @@ pub fn validate_amm_callback(
     caller: Address,
     callback_data: AmmCallbackData,
 ) -> Result<(), AmmError> {
+    caller.require_auth();
+
     // Verify caller is a registered AMM protocol
     let protocols = get_amm_protocols(env)?;
     if !protocols.contains_key(caller.clone()) {
@@ -825,19 +861,81 @@ fn execute_amm_swap(
 fn execute_amm_add_liquidity(
     env: &Env,
     params: &LiquidityParams,
+    supported_pair: &TokenPair,
     callback_data: &AmmCallbackData,
-) -> Result<i128, AmmError> {
-    // Mock implementation
-    let lp_tokens = params
-        .amount_a
-        .checked_add(params.amount_b)
-        .and_then(|v| v.checked_div(2))
-        .ok_or(AmmError::Overflow)?; // Simplified calculation
+) -> Result<(i128, i128, i128), AmmError> {
+    let mut pool = get_pool_state(
+        env,
+        &params.protocol,
+        &supported_pair.token_a,
+        &supported_pair.token_b,
+    );
+
+    let (minted_lp, used_a, used_b) = if pool.total_lp_shares == 0 {
+        // Bootstrap LP minting: floor(sqrt(amount_a * amount_b)).
+        let product = params
+            .amount_a
+            .checked_mul(params.amount_b)
+            .ok_or(AmmError::Overflow)?;
+        let minted = integer_sqrt_floor(product)?;
+        if minted <= 0 {
+            return Err(AmmError::InsufficientLiquidity);
+        }
+        (minted, params.amount_a, params.amount_b)
+    } else {
+        // Proportional minting: floor(min(a * total_lp / reserve_a, b * total_lp / reserve_b)).
+        if pool.reserve_a <= 0 || pool.reserve_b <= 0 {
+            return Err(AmmError::InsufficientLiquidity);
+        }
+        let lp_from_a = params
+            .amount_a
+            .checked_mul(pool.total_lp_shares)
+            .and_then(|v| v.checked_div(pool.reserve_a))
+            .ok_or(AmmError::Overflow)?;
+        let lp_from_b = params
+            .amount_b
+            .checked_mul(pool.total_lp_shares)
+            .and_then(|v| v.checked_div(pool.reserve_b))
+            .ok_or(AmmError::Overflow)?;
+        let minted = min_i128(lp_from_a, lp_from_b);
+        if minted <= 0 {
+            return Err(AmmError::InsufficientLiquidity);
+        }
+
+        // Effective consumed amounts are rounded down.
+        let consumed_a = minted
+            .checked_mul(pool.reserve_a)
+            .and_then(|v| v.checked_div(pool.total_lp_shares))
+            .ok_or(AmmError::Overflow)?;
+        let consumed_b = minted
+            .checked_mul(pool.reserve_b)
+            .and_then(|v| v.checked_div(pool.total_lp_shares))
+            .ok_or(AmmError::Overflow)?;
+        (minted, consumed_a, consumed_b)
+    };
+
+    if used_a < params.min_amount_a || used_b < params.min_amount_b {
+        return Err(AmmError::MinOutputNotMet);
+    }
+
+    pool.reserve_a = pool.reserve_a.checked_add(used_a).ok_or(AmmError::Overflow)?;
+    pool.reserve_b = pool.reserve_b.checked_add(used_b).ok_or(AmmError::Overflow)?;
+    pool.total_lp_shares = pool
+        .total_lp_shares
+        .checked_add(minted_lp)
+        .ok_or(AmmError::Overflow)?;
+    set_pool_state(
+        env,
+        &params.protocol,
+        &supported_pair.token_a,
+        &supported_pair.token_b,
+        &pool,
+    );
 
     // Validate callback
     validate_amm_callback(env, params.protocol.clone(), callback_data.clone())?;
 
-    Ok(lp_tokens)
+    Ok((minted_lp, used_a, used_b))
 }
 
 /// Execute remove liquidity through AMM protocol
@@ -845,16 +943,58 @@ fn execute_amm_add_liquidity(
 fn execute_amm_remove_liquidity(
     env: &Env,
     protocol: &Address,
-    token_a: &Option<Address>,
-    token_b: &Option<Address>,
+    supported_pair: &TokenPair,
     lp_tokens: i128,
     min_amount_a: i128,
     min_amount_b: i128,
     callback_data: &AmmCallbackData,
 ) -> Result<(i128, i128), AmmError> {
-    // Mock implementation
-    let amount_a = lp_tokens; // Simplified
-    let amount_b = lp_tokens; // Simplified
+    if lp_tokens <= 0 {
+        return Err(AmmError::InvalidSwapParams);
+    }
+    let mut pool = get_pool_state(
+        env,
+        protocol,
+        &supported_pair.token_a,
+        &supported_pair.token_b,
+    );
+    if pool.total_lp_shares <= 0 || lp_tokens > pool.total_lp_shares {
+        return Err(AmmError::InsufficientLiquidity);
+    }
+
+    // Burn return math uses floor rounding.
+    let amount_a = lp_tokens
+        .checked_mul(pool.reserve_a)
+        .and_then(|v| v.checked_div(pool.total_lp_shares))
+        .ok_or(AmmError::Overflow)?;
+    let amount_b = lp_tokens
+        .checked_mul(pool.reserve_b)
+        .and_then(|v| v.checked_div(pool.total_lp_shares))
+        .ok_or(AmmError::Overflow)?;
+
+    if amount_a < min_amount_a || amount_b < min_amount_b {
+        return Err(AmmError::MinOutputNotMet);
+    }
+
+    pool.reserve_a = pool
+        .reserve_a
+        .checked_sub(amount_a)
+        .ok_or(AmmError::Overflow)?;
+    pool.reserve_b = pool
+        .reserve_b
+        .checked_sub(amount_b)
+        .ok_or(AmmError::Overflow)?;
+    pool.total_lp_shares = pool
+        .total_lp_shares
+        .checked_sub(lp_tokens)
+        .ok_or(AmmError::Overflow)?;
+    set_pool_state(
+        env,
+        protocol,
+        &supported_pair.token_a,
+        &supported_pair.token_b,
+        &pool,
+    );
 
     // Validate callback
     validate_amm_callback(env, protocol.clone(), callback_data.clone())?;
@@ -1079,6 +1219,8 @@ pub fn initialize_amm_settings(
     max_slippage: i128,
     auto_swap_threshold: i128,
 ) -> Result<(), AmmError> {
+    admin.require_auth();
+
     // Guard against double initialization
     let admin_key = AmmDataKey::Admin;
     if env.storage().persistent().has::<AmmDataKey>(&admin_key) {
@@ -1113,6 +1255,8 @@ pub fn add_amm_protocol(
     admin: Address,
     protocol_config: AmmProtocolConfig,
 ) -> Result<(), AmmError> {
+    admin.require_auth();
+
     // Check admin authorization
     require_admin(env, &admin)?;
 
@@ -1135,6 +1279,8 @@ pub fn update_amm_settings(
     admin: Address,
     settings: AmmSettings,
 ) -> Result<(), AmmError> {
+    admin.require_auth();
+
     // Check admin authorization
     require_admin(env, &admin)?;
 
@@ -1157,6 +1303,79 @@ fn require_admin(env: &Env, caller: &Address) -> Result<(), AmmError> {
         return Err(AmmError::Unauthorized);
     }
     Ok(())
+}
+
+/// Find and return the canonical configured pair for a token pair.
+fn get_supported_pair(
+    protocol_config: &AmmProtocolConfig,
+    token_a: &Option<Address>,
+    token_b: &Option<Address>,
+) -> Result<TokenPair, AmmError> {
+    for pair in protocol_config.supported_pairs.iter() {
+        if (pair.token_a == *token_a && pair.token_b == *token_b)
+            || (pair.token_a == *token_b && pair.token_b == *token_a)
+        {
+            return Ok(pair);
+        }
+    }
+    Err(AmmError::InvalidTokenPair)
+}
+
+fn get_pool_state(
+    env: &Env,
+    protocol: &Address,
+    token_a: &Option<Address>,
+    token_b: &Option<Address>,
+) -> PoolState {
+    let key = AmmDataKey::PoolState(protocol.clone(), token_a.clone(), token_b.clone());
+    env.storage()
+        .persistent()
+        .get::<AmmDataKey, PoolState>(&key)
+        .unwrap_or(PoolState {
+            reserve_a: 0,
+            reserve_b: 0,
+            total_lp_shares: 0,
+        })
+}
+
+fn set_pool_state(
+    env: &Env,
+    protocol: &Address,
+    token_a: &Option<Address>,
+    token_b: &Option<Address>,
+    state: &PoolState,
+) {
+    let key = AmmDataKey::PoolState(protocol.clone(), token_a.clone(), token_b.clone());
+    env.storage().persistent().set(&key, state);
+}
+
+fn min_i128(a: i128, b: i128) -> i128 {
+    if a < b { a } else { b }
+}
+
+/// Integer square root with floor rounding.
+fn integer_sqrt_floor(n: i128) -> Result<i128, AmmError> {
+    if n < 0 {
+        return Err(AmmError::InvalidSwapParams);
+    }
+    if n <= 1 {
+        return Ok(n);
+    }
+
+    let mut x0 = n;
+    let mut x1 = (x0
+        .checked_add(n.checked_div(x0).ok_or(AmmError::Overflow)?)
+        .ok_or(AmmError::Overflow)?)
+        / 2;
+
+    while x1 < x0 {
+        x0 = x1;
+        x1 = (x0
+            .checked_add(n.checked_div(x0).ok_or(AmmError::Overflow)?)
+            .ok_or(AmmError::Overflow)?)
+            / 2;
+    }
+    Ok(x0)
 }
 
 // Public query functions for analytics

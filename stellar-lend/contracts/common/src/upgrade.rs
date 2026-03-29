@@ -1,3 +1,5 @@
+#![allow(clippy::enum_variant_names)]
+
 use soroban_sdk::{
     contracterror, contracttype, panic_with_error, symbol_short, Address, BytesN, Env, Vec,
 };
@@ -49,24 +51,26 @@ pub struct UpgradeStatus {
     pub target_version: u32,
 }
 
+// collisions with other contracts sharing the same Soroban persistent storage.
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum UpgradeKey {
-    Admin,
-    Approvers,
-    RequiredApprovals,
-    NextProposalId,
-    CurrentWasmHash,
-    CurrentVersion,
-    Proposal(u64),
+    UpAdmin,
+    UpApprovers,
+    UpReqApprovals,
+    UpNextPropId,
+    UpCurrWasmHash,
+    UpCurrVersion,
+    UpProposal(u64),
 }
+
 
 pub struct UpgradeManager;
 
 impl UpgradeManager {
     #[allow(deprecated)]
     pub fn init(env: Env, admin: Address, current_wasm_hash: BytesN<32>, required_approvals: u32) {
-        if env.storage().persistent().has(&UpgradeKey::Admin) {
+        if env.storage().persistent().has(&UpgradeKey::UpAdmin) {
             panic_with_error!(&env, UpgradeError::AlreadyInitialized);
         }
         if required_approvals == 0 {
@@ -76,22 +80,22 @@ impl UpgradeManager {
         let mut approvers = Vec::new(&env);
         approvers.push_back(admin.clone());
 
-        env.storage().persistent().set(&UpgradeKey::Admin, &admin);
+        env.storage().persistent().set(&UpgradeKey::UpAdmin, &admin);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::Approvers, &approvers);
+            .set(&UpgradeKey::UpApprovers, &approvers);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::RequiredApprovals, &required_approvals);
+            .set(&UpgradeKey::UpReqApprovals, &required_approvals);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::NextProposalId, &1u64);
+            .set(&UpgradeKey::UpNextPropId, &1u64);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::CurrentWasmHash, &current_wasm_hash);
+            .set(&UpgradeKey::UpCurrWasmHash, &current_wasm_hash);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::CurrentVersion, &0u32);
+            .set(&UpgradeKey::UpCurrVersion, &0u32);
 
         #[allow(deprecated)]
         env.events()
@@ -108,7 +112,7 @@ impl UpgradeManager {
             approvers.push_back(approver.clone());
             env.storage()
                 .persistent()
-                .set(&UpgradeKey::Approvers, &approvers);
+                .set(&UpgradeKey::UpApprovers, &approvers);
         }
 
         #[allow(deprecated)]
@@ -138,7 +142,7 @@ impl UpgradeManager {
 
         env.storage()
             .persistent()
-            .set(&UpgradeKey::Approvers, &updated);
+            .set(&UpgradeKey::UpApprovers, &updated);
         env.events()
             .publish((symbol_short!("up_aprm"), caller, approver), ());
     }
@@ -170,7 +174,7 @@ impl UpgradeManager {
         let id: u64 = env
             .storage()
             .persistent()
-            .get(&UpgradeKey::NextProposalId)
+            .get(&UpgradeKey::UpNextPropId)
             .unwrap_or(1);
         let proposal = UpgradeProposal {
             id,
@@ -185,10 +189,10 @@ impl UpgradeManager {
 
         env.storage()
             .persistent()
-            .set(&UpgradeKey::Proposal(id), &proposal);
+            .set(&UpgradeKey::UpProposal(id), &proposal);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::NextProposalId, &(id + 1));
+            .set(&UpgradeKey::UpNextPropId, &(id + 1));
 
         #[allow(deprecated)]
         env.events()
@@ -217,7 +221,7 @@ impl UpgradeManager {
 
         env.storage()
             .persistent()
-            .set(&UpgradeKey::Proposal(proposal_id), &proposal);
+            .set(&UpgradeKey::UpProposal(proposal_id), &proposal);
         #[allow(deprecated)]
         env.events()
             .publish((symbol_short!("up_appr"), caller, proposal_id), count);
@@ -246,13 +250,13 @@ impl UpgradeManager {
 
         env.storage()
             .persistent()
-            .set(&UpgradeKey::CurrentWasmHash, &proposal.new_wasm_hash);
+            .set(&UpgradeKey::UpCurrWasmHash, &proposal.new_wasm_hash);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::CurrentVersion, &proposal.new_version);
+            .set(&UpgradeKey::UpCurrVersion, &proposal.new_version);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::Proposal(proposal_id), &proposal);
+            .set(&UpgradeKey::UpProposal(proposal_id), &proposal);
 
         #[allow(deprecated)]
         env.events().publish(
@@ -280,15 +284,15 @@ impl UpgradeManager {
 
         env.storage()
             .persistent()
-            .set(&UpgradeKey::CurrentWasmHash, &prev_hash);
+            .set(&UpgradeKey::UpCurrWasmHash, &prev_hash);
         env.storage()
             .persistent()
-            .set(&UpgradeKey::CurrentVersion, &prev_version);
+            .set(&UpgradeKey::UpCurrVersion, &prev_version);
 
         proposal.stage = UpgradeStage::RolledBack;
         env.storage()
             .persistent()
-            .set(&UpgradeKey::Proposal(proposal_id), &proposal);
+            .set(&UpgradeKey::UpProposal(proposal_id), &proposal);
 
         #[allow(deprecated)]
         env.events().publish(
@@ -311,40 +315,44 @@ impl UpgradeManager {
     pub fn current_wasm_hash(env: Env) -> BytesN<32> {
         env.storage()
             .persistent()
-            .get(&UpgradeKey::CurrentWasmHash)
+            .get(&UpgradeKey::UpCurrWasmHash)
             .unwrap()
     }
 
     pub fn current_version(env: Env) -> u32 {
         env.storage()
             .persistent()
-            .get(&UpgradeKey::CurrentVersion)
+            .get(&UpgradeKey::UpCurrVersion)
             .unwrap_or(0)
     }
 
     fn required_approvals(env: Env) -> u32 {
         env.storage()
             .persistent()
-            .get(&UpgradeKey::RequiredApprovals)
+            .get(&UpgradeKey::UpReqApprovals)
             .unwrap_or(0)
     }
 
     fn proposal(env: Env, proposal_id: u64) -> UpgradeProposal {
         env.storage()
             .persistent()
-            .get(&UpgradeKey::Proposal(proposal_id))
+            .get(&UpgradeKey::UpProposal(proposal_id))
             .unwrap_or_else(|| panic_with_error!(&env, UpgradeError::ProposalNotFound))
     }
 
     fn approvers(env: &Env) -> Vec<Address> {
         env.storage()
             .persistent()
-            .get(&UpgradeKey::Approvers)
+            .get(&UpgradeKey::UpApprovers)
             .unwrap_or_else(|| Vec::new(env))
     }
 
     fn assert_admin(env: &Env, caller: &Address) {
-        let admin: Address = env.storage().persistent().get(&UpgradeKey::Admin).unwrap();
+        let admin: Address = env
+            .storage()
+            .persistent()
+            .get(&UpgradeKey::UpAdmin)
+            .unwrap();
         if *caller != admin {
             panic_with_error!(env, UpgradeError::NotAuthorized);
         }
