@@ -41,7 +41,8 @@ use flash_loan::{
 use pause::{
     blocks_high_risk_ops, complete_recovery as complete_recovery_logic,
     get_emergency_state as get_emergency_state_logic, get_guardian as get_guardian_logic,
-    is_paused, is_recovery, set_guardian as set_guardian_logic, set_pause as set_pause_impl,
+    get_pause_state as get_pause_state_logic, is_paused, is_recovery,
+    set_guardian as set_guardian_logic, set_pause as set_pause_impl,
     start_recovery as start_recovery_logic, trigger_shutdown as trigger_shutdown_logic,
     EmergencyState, PauseType,
 };
@@ -58,8 +59,8 @@ use views::{
 };
 
 use withdraw::{
-    initialize_withdraw_settings as initialize_withdraw_logic,
-    set_withdraw_paused as set_withdraw_paused_logic, withdraw as withdraw_logic, WithdrawError,
+    initialize_withdraw_settings as initialize_withdraw_logic, withdraw as withdraw_logic,
+    WithdrawError,
 };
 
 mod data_store;
@@ -206,6 +207,20 @@ impl LendingContract {
     /// Read current emergency lifecycle state.
     pub fn get_emergency_state(env: Env) -> EmergencyState {
         get_emergency_state_logic(&env)
+    }
+
+    /// Query whether a specific operation is currently paused.
+    ///
+    /// Returns `true` if the operation is paused either by its own granular flag
+    /// or by the global `All` flag. This is a read-only function; no authorization
+    /// is required. Frontends and off-chain monitors should use this to surface
+    /// live pause state to users before they attempt a transaction.
+    ///
+    /// # Arguments
+    /// * `pause_type` - The operation type to query (`Deposit`, `Borrow`, `Repay`,
+    ///                  `Withdraw`, `Liquidation`, or `All`)
+    pub fn get_pause_state(env: Env, pause_type: PauseType) -> bool {
+        get_pause_state_logic(&env, pause_type)
     }
 
     /// Repay borrowed assets
@@ -476,13 +491,17 @@ impl LendingContract {
         init_deposit_settings_impl(&env, deposit_cap, min_deposit_amount)
     }
 
-    /// Set deposit pause state (admin only)
+    /// Set deposit pause state (admin only).
+    ///
+    /// Convenience wrapper around [`set_pause`] scoped to `PauseType::Deposit`.
+    /// Emits a `pause_event` so off-chain monitors can react.
+    ///
+    /// # Errors
+    /// Returns [`DepositError::Unauthorized`] if the caller is not the admin.
     pub fn set_deposit_paused(env: Env, paused: bool) -> Result<(), DepositError> {
         let admin = get_protocol_admin(&env).ok_or(DepositError::Unauthorized)?;
         admin.require_auth();
-        env.storage()
-            .persistent()
-            .set(&pause::PauseDataKey::State(PauseType::Deposit), &paused);
+        set_pause_impl(&env, admin, PauseType::Deposit, paused);
         Ok(())
     }
 
@@ -545,11 +564,18 @@ impl LendingContract {
         initialize_withdraw_logic(&env, min_withdraw_amount)
     }
 
-    /// Set withdraw pause state (admin only)
+    /// Set withdraw pause state (admin only).
+    ///
+    /// Convenience wrapper around [`set_pause`] scoped to `PauseType::Withdraw`.
+    /// Emits a `pause_event` so off-chain monitors can react.
+    ///
+    /// # Errors
+    /// Returns [`WithdrawError::Unauthorized`] if the caller is not the admin.
     pub fn set_withdraw_paused(env: Env, paused: bool) -> Result<(), WithdrawError> {
         let admin = get_protocol_admin(&env).ok_or(WithdrawError::Unauthorized)?;
         admin.require_auth();
-        set_withdraw_paused_logic(&env, paused)
+        set_pause_impl(&env, admin, PauseType::Withdraw, paused);
+        Ok(())
     }
 
     /// Token receiver hook

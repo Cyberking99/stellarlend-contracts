@@ -155,7 +155,13 @@ pub fn initialize_withdraw_settings(
     Ok(())
 }
 
-/// Set withdraw pause state
+/// Set the legacy withdraw pause flag (kept for storage-layer compatibility).
+///
+/// Prefer using the unified `set_pause(PauseType::Withdraw, …)` entry point
+/// on the contract, which routes through the granular pause system and emits
+/// a `pause_event`. This inner helper only writes the legacy key; it is
+/// intentionally kept so that the persistent-storage layout remains stable.
+#[allow(dead_code)]
 pub fn set_withdraw_paused(env: &Env, paused: bool) -> Result<(), WithdrawError> {
     env.storage()
         .persistent()
