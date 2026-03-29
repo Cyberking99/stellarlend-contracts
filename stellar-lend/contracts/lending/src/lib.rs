@@ -6,6 +6,7 @@ use soroban_sdk::{contract, contractimpl, Address, Bytes, BytesN, Env, Val, Vec}
 mod borrow;
 mod deposit;
 mod flash_loan;
+mod oracle;
 mod pause;
 mod token_receiver;
 mod withdraw;
@@ -21,6 +22,7 @@ use borrow::{
     set_liquidation_threshold_bps as set_liq_threshold_impl, set_oracle as set_oracle_impl,
     BorrowCollateral, BorrowError, DebtPosition,
 };
+use oracle::{OracleConfig, OracleError};
 use deposit::{
     deposit as deposit_impl, get_user_collateral as get_deposit_collateral_impl,
     initialize_deposit_settings as init_deposit_settings_impl, DepositCollateral, DepositError,
@@ -89,6 +91,8 @@ mod withdraw_test;
 mod borrow_test_booster;
 #[cfg(test)]
 mod liquidation_boundary_test;
+#[cfg(test)]
+mod oracle_test;
 #[cfg(test)]
 mod stress_test;
 
@@ -312,6 +316,83 @@ impl LendingContract {
     /// Set oracle address for price feeds (admin only).
     pub fn set_oracle(env: Env, admin: Address, oracle: Address) -> Result<(), BorrowError> {
         set_oracle_impl(&env, &admin, oracle)
+    }
+
+    /// Configure oracle staleness parameters (admin only).
+    ///
+    /// # Errors
+    /// - `OracleError::Unauthorized` — caller is not the protocol admin.
+    /// - `OracleError::InvalidPrice` — `max_staleness_seconds` is zero.
+    pub fn configure_oracle(
+        env: Env,
+        caller: Address,
+        config: OracleConfig,
+    ) -> Result<(), OracleError> {
+        oracle::configure_oracle(&env, caller, config)
+    }
+
+    /// Register the primary oracle address for `asset` (admin only).
+    ///
+    /// # Errors
+    /// - `OracleError::Unauthorized` — caller is not the protocol admin.
+    /// - `OracleError::InvalidOracle` — oracle address is the contract itself.
+    pub fn set_primary_oracle(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        primary_oracle: Address,
+    ) -> Result<(), OracleError> {
+        oracle::set_primary_oracle(&env, caller, asset, primary_oracle)
+    }
+
+    /// Register the fallback oracle address for `asset` (admin only).
+    ///
+    /// # Errors
+    /// - `OracleError::Unauthorized` — caller is not the protocol admin.
+    /// - `OracleError::InvalidOracle` — oracle address is the contract itself.
+    pub fn set_fallback_oracle(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        fallback_oracle: Address,
+    ) -> Result<(), OracleError> {
+        oracle::set_fallback_oracle(&env, caller, asset, fallback_oracle)
+    }
+
+    /// Submit a price update for `asset`.
+    ///
+    /// Caller must be the admin, the registered primary oracle, or the registered
+    /// fallback oracle for this asset.
+    ///
+    /// # Errors
+    /// - `OracleError::OraclePaused` — oracle updates are paused.
+    /// - `OracleError::Unauthorized` — caller is not authorized.
+    /// - `OracleError::InvalidPrice` — price is zero or negative.
+    pub fn update_price_feed(
+        env: Env,
+        caller: Address,
+        asset: Address,
+        price: i128,
+    ) -> Result<(), OracleError> {
+        oracle::update_price_feed(&env, caller, asset, price)
+    }
+
+    /// Get the current price for `asset` (primary → fallback → error).
+    ///
+    /// # Errors
+    /// - `OracleError::StalePrice` — best available price is stale.
+    /// - `OracleError::NoPriceFeed` — no price has been submitted for this asset.
+    pub fn get_price(env: Env, asset: Address) -> Result<i128, OracleError> {
+        oracle::get_price(&env, &asset)
+    }
+
+    /// Pause or unpause oracle price updates (admin only).
+    pub fn set_oracle_paused(
+        env: Env,
+        caller: Address,
+        paused: bool,
+    ) -> Result<(), OracleError> {
+        oracle::set_oracle_paused(&env, caller, paused)
     }
 
     /// Set liquidation threshold in basis points, e.g. 8000 = 80% (admin only).
