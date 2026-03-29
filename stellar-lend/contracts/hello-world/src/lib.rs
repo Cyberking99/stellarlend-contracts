@@ -88,9 +88,13 @@ impl HelloContract {
 
     /// Initialize the contract with admin address.
     pub fn initialize(env: Env, admin: Address) -> Result<(), RiskManagementError> {
-        if crate::admin::has_admin(&env) {
-            return Err(RiskManagementError::Unauthorized);
+        // Check if already initialized (comprehensive check)
+        if crate::admin::has_admin(&env) || 
+           crate::risk_management::get_risk_config(&env).is_some() ||
+           crate::interest_rate::get_interest_rate_config(&env).is_some() {
+            return Err(RiskManagementError::AlreadyInitialized);
         }
+        
         crate::admin::set_admin(&env, admin.clone(), None)
             .map_err(|_| RiskManagementError::Unauthorized)?;
         initialize_risk_management(&env, admin.clone())?;
@@ -353,6 +357,11 @@ impl HelloContract {
     pub fn get_liquidation_incentive(env: Env) -> Result<i128, RiskManagementError> {
         risk_params::get_liquidation_incentive(&env)
             .map_err(|_| RiskManagementError::InvalidParameter)
+    }
+
+    /// Get current utilization (in basis points).
+    pub fn get_utilization(env: Env) -> i128 {
+        interest_rate::calculate_utilization(&env).unwrap_or(0)
     }
 
     /// Get current borrow rate (in basis points).
