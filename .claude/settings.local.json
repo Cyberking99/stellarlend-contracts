@@ -6,14 +6,15 @@
       "Bash(cargo test:*)",
       "Bash(find:*)",
       "Bash(echo \"EXIT:$?\")",
-      "Bash(cargo fmt:*)",
-      "Bash(cargo clippy:*)",
       "Bash(cargo tarpaulin:*)",
+      "Bash(echo \"EXIT:$?\")",
       "Bash(cargo fmt:*)",
       "Bash(cargo clippy:*)"
     ],
     "deny": [],
     "ask": []
   },
-  "disabledMcpjsonServers": ["supabase"]
+  "disabledMcpjsonServers": [
+    "supabase"
+  ]
 }
