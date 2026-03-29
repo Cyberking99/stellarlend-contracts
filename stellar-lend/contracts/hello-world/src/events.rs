@@ -54,6 +54,8 @@ pub struct LiquidationEvent {
     pub debt_liquidated: i128,
     pub collateral_seized: i128,
     pub incentive_amount: i128,
+    pub debt_price: i128,
+    pub collateral_price: i128,
     pub timestamp: u64,
 }
 
